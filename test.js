@@ -1,324 +1,314 @@
-// there are other data above i didn't add because they're not that important, let's focus on those below
+// .env
+ADMIN_EMAIL=olympusexperts@gmail.com
+ADMIN_PASSWORD=mountolympusABBA@@
+JWT_SECRET=kkkkddddcccc
 
-// AdSpaceModel.js  this is for the web owner
-const adSpaceSchema = new mongoose.Schema({
-  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'AdCategory', required: true },
-  spaceType: { type: String, required: true },
-  price: { type: Number, required: true, min: 0 },
-  availability: { type: String, required: true },
-  startDate: { type: Date, default: null },
-  endDate: { type: Date, default: null },
-  userCount: { type: Number, default: 0 },
-  instructions: { type: String },
-  apiCodes: {
-    HTML: { type: String },
-    JavaScript: { type: String },
-    PHP: { type: String },
-    Python: { type: String },
+// models/userModel.js
+const mongoose = require('mongoose');
+
+const userSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: true,
+    unique: true,
   },
-  selectedAds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ImportAd' }],
-  createdAt: { type: Date, default: Date.now },
-  webOwnerEmail: { type: String, required: true },
+  password: {
+    type: String,
+    required: true,
+  },
 });
 
-// AdSpaceController.js  this is for the web owner
-const generateApiCodesForAllLanguages = (spaceId, websiteId, categoryId, startDate = null, endDate = null) => {
-  const apiUrl = `http://localhost:5000/api/ads/display?space=${spaceId}&website=${websiteId}&category=${categoryId}`;
+const User = mongoose.model('User', userSchema);
+module.exports = User;
 
-  const dateCheckScript = startDate && endDate
-    ? `
-      const now = new Date();
-      const start = new Date("${startDate}");
-      const end = new Date("${endDate}");
-      if (now >= start && now <= end) {
-        var ad = document.createElement('script');
-        ad.src = "${apiUrl}";
-        document.getElementById("${spaceId}-ad").appendChild(ad);
-      }
-    `
-    : `
-      var ad = document.createElement('script');
-      ad.src = "${apiUrl}";
-      document.getElementById("${spaceId}-ad").appendChild(ad);
-    `;
 
-  const apiCodes = {
-    HTML: `<script src="${apiUrl}"></script>`,
-    JavaScript: `<script>
-                  (function() {
-                    ${dateCheckScript}
-                  })();
-                </script>`,
-    PHP: `<?php echo '<div id="${spaceId}-ad"><script src="${apiUrl}"></script></div>'; ?>`,
-    Python: `print('<div id="${spaceId}-ad"><script src="${apiUrl}"></script></div>')`,
+// controllers/authController.js
+const User = require('../models/userModel');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+// SECRET PASSWORD AND EMAIL (Stored in environment variables)
+const { ADMIN_EMAIL, ADMIN_PASSWORD, JWT_SECRET } = process.env;
+
+// Login handler
+exports.login = async (req, res) => {
+  const { email, password } = req.body;
+
+  // Check if the email matches the allowed one
+  if (email !== ADMIN_EMAIL) {
+    return res.status(403).json({ message: "Access Denied" });
+  }
+
+  try {
+    // Check if user exists
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Verify the password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '1h' });
+
+    res.json({
+      message: 'Login successful',
+      token,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Initialize the admin user if it doesn't exist
+exports.initAdmin = async (req, res) => {
+  try {
+    const user = await User.findOne({ email: ADMIN_EMAIL });
+
+    if (!user) {
+      // Hash the default password
+      const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 10);
+
+      // Create the admin user
+      const newUser = new User({
+        email: ADMIN_EMAIL,
+        password: hashedPassword,
+      });
+
+      await newUser.save();
+      console.log('Admin user created successfully.');
+    }
+  } catch (error) {
+    console.error('Error creating admin user', error);
+  }
+};
+
+// routes/authRoutes.js
+const express = require('express');
+const authController = require('../controllers/authController');
+
+const router = express.Router();
+
+// Route for login
+router.post('/login', authController.login);
+
+// Initialize admin user (Run only once during setup)
+router.get('/init-admin', authController.initAdmin);
+
+module.exports = router;
+
+// server.js
+const express = require('express');
+const cors = require('cors');
+const connectDB = require('./config/database');
+const authRoutes = require('./routes/authRoutes');
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+app.use('/api/auth', authRoutes);
+
+connectDB()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.log(error);
+  });
+
+// LoginPage.js
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import './auth.css'
+
+const LoginPage = () => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    try {
+      const response = await axios.post('http://localhost:5000/api/auth/login', {
+        email,
+        password,
+      });
+
+      // Save the token in localStorage
+      localStorage.setItem('token', response.data.token);
+
+      // Redirect to homepage
+      navigate('/');
+    } catch (err) {
+      setError('Invalid email or password');
+    }
   };
 
-  return apiCodes;
+  return (
+    <div className='login-container'>
+      <h1>Login</h1>
+      <form onSubmit={handleSubmit}>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email"
+          required
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          required
+        />
+        <button type="submit">Login</button>
+      </form>
+      {error && <p>{error}</p>}
+    </div>
+  );
 };
 
-exports.createSpace = async (req, res) => {
-  try {
-    const { categoryId, spaceType, price, availability, userCount, instructions, startDate, endDate, webOwnerEmail } = req.body;
+export default LoginPage;
 
-    if (!categoryId || !spaceType || !price || !availability || !userCount) {
-      return res.status(400).json({ message: 'All required fields must be provided' });
+// RequireAuth.js
+import React, { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+// Higher-Order Component to protect routes
+const RequireAuth = ({ children }) => {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');  // Redirect to login if no token is found
     }
+  }, [navigate]);
 
-    // Retrieve website ID from the category
-    const category = await AdCategory.findById(categoryId).populate('websiteId');
-    if (!category) {
-      return res.status(404).json({ message: 'Category not found' });
-    }
-    const websiteId = category.websiteId._id;
-
-    // Create new AdSpace
-    const newSpace = new AdSpace({
-      categoryId,
-      spaceType,
-      price,
-      availability,
-      userCount,
-      instructions,
-      startDate,
-      endDate,
-      webOwnerEmail
-    });
-    const savedSpace = await newSpace.save();
-
-    // Generate API codes
-    const apiCodes = generateApiCodesForAllLanguages(savedSpace._id, websiteId, categoryId, startDate, endDate);
-    savedSpace.apiCodes = apiCodes;
-    await savedSpace.save();
-
-    res.status(201).json(savedSpace);
-  } catch (error) {
-    console.error('Error saving ad space:', error);
-    res.status(500).json({ message: 'Failed to create ad space', error });
-  }
+  return children;  // Render the protected components if authenticated
 };
 
-// ImportAdModel.js this is for the ad owner
-const importAdSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
-  imageUrl: { type: String },
-  pdfUrl: { type: String },
-  videoUrl: { type: String },
-  businessName: { type: String, required: true },
-  businessLocation: { type: String, required: true },
-  adDescription: { type: String, required: true },
-  selectedWebsites: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Website' }],
-  selectedCategories: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AdCategory' }],
-  selectedSpaces: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AdSpace' }],
-  approved: { type: Boolean, default: false },
-});
+export default RequireAuth;
 
-// ImportAdController.js  this is for the ad owner
-exports.createImportAd = [upload.single('file'), async (req, res) => {
-  try {
-    const {
-      userId,
-      businessName,
-      businessLocation,
-      adDescription,
-      selectedWebsites,
-      selectedCategories,
-      selectedSpaces
-    } = req.body;
-    const websitesArray = JSON.parse(selectedWebsites);
-    const categoriesArray = JSON.parse(selectedCategories);
-    const spacesArray = JSON.parse(selectedSpaces);
+// header.js
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import './styles/header.css';
+import Logo from "./logo";
+import menuIcon from '../assets/img/menu.png';
+import closeIcon from '../assets/img/close.png';
 
-    let imageUrl = '';
-    let pdfUrl = '';
-    let videoUrl = '';
+function Header() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const navigate = useNavigate();
 
-    // Create ImportAd entry
-    const newRequestAd = new ImportAd({
-      userId,
-      imageUrl,
-      pdfUrl,
-      videoUrl,
-      businessName,
-      businessLocation,
-      adDescription,
-      selectedWebsites: websitesArray,
-      selectedCategories: categoriesArray,
-      selectedSpaces: spacesArray
-    });
-    const savedRequestAd = await newRequestAd.save();
-
-    await AdSpace.updateMany(
-      { _id: { $in: spacesArray } }, 
-      { $push: { selectedAds: savedRequestAd._id } }
-    );
-    res.status(201).json(savedRequestAd);
-}];
-
-// AdApprovalController.js  this is for the web owner
-exports.getPendingAds = async (req, res) => {
-  try {
-    const pendingAds = await ImportAd.find({ approved: false }).populate('selectedSpaces');
-    res.status(200).json(pendingAds);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching pending ads' });
-  }
-};
-
-exports.approveAd = async (req, res) => {
-  try {
-    const { adId } = req.params;
-    const updatedAd = await ImportAd.findByIdAndUpdate(adId, { approved: true }, { new: true });
-
-    if (!updatedAd) {
-      return res.status(404).json({ message: 'Ad not found' });
+  useEffect(() => {
+    // Check if the token exists in localStorage
+    const token = localStorage.getItem('token');
+    if (token) {
+      setIsLoggedIn(true);
+    } else {
+      setIsLoggedIn(false);
     }
+  }, []);
 
-    res.status(200).json({ message: 'Ad approved successfully', ad: updatedAd });
-  } catch (error) {
-    res.status(500).json({ message: 'Error approving ad' });
-  }
-};
+  const handleLogout = () => {
+    // Clear token and redirect to login
+    localStorage.removeItem('token');
+    setIsLoggedIn(false);
+    navigate('/login');
+  };
 
-// AdDisplayController.js  this is for the web owner
-exports.displayAd = async (req, res) => {
-  try {
-    const { space, website, category } = req.query;
-    const adSpace = await AdSpace.findById(space).populate({
-      path: 'selectedAds',
-      match: { approved: true }, // Only retrieve approved ads
-    });
-    
-    if (!adSpace || adSpace.selectedAds.length === 0) {
-      return res.status(404).send('No ads available for this space');
-    }
+  const toggleMenu = () => {
+    setIsOpen(!isOpen);
+  };
 
-    const currentDate = new Date();
-    const { startDate, endDate, availability } = adSpace;
-    if (
-      (availability === 'Reserved for future date' || availability === 'Pick a date') &&
-      (currentDate < new Date(startDate) || currentDate > new Date(endDate))
-    ) {
-      return res.status(403).send('Ad is not available during this time period.');
-    }
-
-    const userCount = adSpace.userCount;
-    const adsToShow = adSpace.selectedAds.slice(0, userCount);
-    const adsHtml = adsToShow
-      .map((selectedAd) => {
-        const imageUrl = selectedAd.imageUrl ? `http://localhost:5000${selectedAd.imageUrl}` : '';
-        return `
-          <div class="ad">
-            <h3>${selectedAd.businessName}</h3>
-            <p>${selectedAd.adDescription}</p>
-            ${imageUrl ? `<img src="${imageUrl}" alt="Ad Image">` : ''}
-            ${selectedAd.pdfUrl ? `<a href="${selectedAd.pdfUrl}" target="_blank">Download PDF</a>` : ''}
-            ${selectedAd.videoUrl ? `<video src="${selectedAd.videoUrl}" controls></video>` : ''}
+  return (
+    <div className='dash-header-ctn'>
+      <header>
+        <nav>
+          <div className="container">
+            <div className={`nav-links ${isOpen ? 'open' : ''}`}>
+              <Link to='/edit' onClick={toggleMenu}>Edit Ads</Link>
+            </div>
+            <div className="logo">
+              <Logo />
+            </div>
+            <div className="user">
+              {isLoggedIn ? (
+                <button onClick={handleLogout}>Logout</button>
+              ) : (
+                <Link to="/login" onClick={toggleMenu}>Login</Link>
+              )}
+            </div>
+            <button className="menu-toggle" onClick={toggleMenu}>
+              <img src={isOpen ? closeIcon : menuIcon} alt="Menu Toggle" />
+            </button>
           </div>
-        `;
-      })
-      .join('');
+        </nav>
+      </header>
+    </div>
+  );
+}
 
-    res.status(200).send(adsHtml);
+export default Header;
+
+// index.js
+import './index.css';
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import LoginPage from './pages/auth/LoginPage';
+import Homepage from './pages/Homepage';
+import Header from './pages/header';
+import RequireAuth from './pages/auth/RequireAuth'; // The HOC for authentication
+
+// Protect all routes except login
+const ProtectedRoute = ({ children }) => {
+  return (
+    <RequireAuth>
+      {children}
+    </RequireAuth>
+  );
 };
 
-// DashboardLayout.js  this is for the web owner
-import { useAuth } from "@clerk/clerk-react"
-
-export default function DashboardLayout() {
-  const { userId, isLoaded } = useAuth()
-  const navigate = useNavigate()
-
-  React.useEffect(() => {
-    if (!userId) {
-      navigate("/sign-in")
-    }
-  }, [])
-
-  return (
-    <Outlet />
-  )
-}
-
-// root-layout.js  this is for the web owner
-import { Link, Outlet } from 'react-router-dom';
-import { ClerkProvider, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
-
-const PUBLISHABLE_KEY = process.env.REACT_APP_CLERK_PUBLISHABLE_KEY;
-export default function RootLayout() {
-
-  return (
-    <ClerkProvider
-      publishableKey={PUBLISHABLE_KEY}
-    >
-      <SignedIn>
-        <UserButton afterSignOutUrl='/sign-in' />
-      </SignedIn>
-
-      <SignedOut>
-        <Link to="/sign-in" style={linkStyles}>Sign In</Link>
-      </SignedOut>
-      <main>
-        <Outlet />
-      </main>
-    </ClerkProvider>
-  );
-}
-
-// sign-in.js  this is for the web owner
-import { SignIn } from "@clerk/clerk-react";
-export default function SignInPage() {
-  return (
-    <div>
-      <SignIn />
-    </div>
-  );
-}
-
-// sign-up.js  this is for the web owner
-import { SignUp } from "@clerk/clerk-react";
-export default function SignUpPage() {
-  return (
-    <div>
-      <SignUp />
-    </div>
-  );
-}
-
-// Spaces.js this is for the web owner 
-import { useUser } from '@clerk/clerk-react'
-
-function Spaces() {
-  const { user } = useUser();
-  const webOwnerEmail = user.primaryEmailAddress.emailAddress;
-
-  const submitSpacesToDatabase = async () => {
-    setLoading(true);
-    try {
-      for (const category in spaces) {
-        const spaceData = spaces[category];
-        const categoryId = selectedCategories[category]?.id;
-
-        if (categoryId) {
-          for (const spaceType of ['header', 'sidebar']) {
-            if (spaceData[spaceType]) {
-              const { availability, startDate, endDate, price, userCount, instructions } = spaceData[spaceType];
-              // Submit the ad space data
-              await axios.post('http://localhost:5000/api/ad-spaces', {
-                categoryId,
-                spaceType: spaceType.charAt(0).toUpperCase() + spaceType.slice(1),
-                price,
-                availability,
-                userCount,
-                instructions: instructions || '',
-                startDate,
-                endDate,
-                webOwnerEmail
-              });
-            }
-          }
+const App = () => (
+  <BrowserRouter>
+    <Header /> {/* Header at the top level */}
+    <Routes>
+      <Route path="/login" element={<LoginPage />} /> {/* The only public page */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <Homepage />
+          </ProtectedRoute>
         }
-      }
-      setLoading(false);
-      alert('Ad spaces created successfully!');
-}
-the ads waits for being approved the system must send an email to the web owner(the one who created a space that the as owner selected when he was importing his ad) and approve it, because the web owner might not be informed that there's someone who wants to advertise on his web, so he must be notified on gmail because the system uses clerk as an authentication they sign in by using google or by continuing with google, so i want that email to be sent to the email he used when creating account. the clerk authentication is built in frontenf and that's where its API is, the one who sends these data is the ad owner, use resend and im new to it so go step by step until i test it and see an email in my gmail
+      />
+    </Routes>
+  </BrowserRouter>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+POST http://localhost:5000/api/auth/login 404 (Not Found)
