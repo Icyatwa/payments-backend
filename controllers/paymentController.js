@@ -1,100 +1,172 @@
-// controllers/paymentController.js
-const axios = require("axios");
-const PaymentSettings = require("../models/PaymentSettings");
-const Transaction = require("../models/Transaction");
+// // Paymentcontroller.js
+// const Flutterwave = require('flutterwave-node-v3');
+// const axios = require('axios');
 
-// PayPal Configuration
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
-const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
-const PAYPAL_BASE_URL = "https://sandbox.paypal.com";
+// // Initialize Flutterwave
+// const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
 
-// Helper to retrieve PayPal access token
-async function getPayPalAccessToken() {
+// exports.initiateCardPayment = async (req, res) => {
+//   try {
+//     const { amount, currency, email, phoneNumber } = req.body;
+
+//     if (!amount || !currency || !phoneNumber) {
+//       return res.status(400).json({ message: 'Missing required fields' });
+//     }
+
+//     const tx_ref = 'CARDPAY-' + Date.now();
+//     const paymentPayload = {
+//       tx_ref: tx_ref,
+//       amount: amount,
+//       currency: currency,
+//       redirect_url: 'http://localhost:5000/api/payment/callback',
+//       customer: {
+//         email: email || 'no-email@example.com',
+//         phonenumber: phoneNumber,
+//       },
+//       payment_options: 'card',
+//       customizations: {
+//         title: 'Card Payment',
+//         description: 'Pay with your bank card',
+//       },
+//     };
+
+//     const response = await axios.post('https://api.flutterwave.com/v3/payments', paymentPayload, {
+//       headers: {
+//         Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+//         'Content-Type': 'application/json',
+//       },
+//     });
+
+//     if (response.data && response.data.data && response.data.data.link) {
+//       res.status(200).json({ paymentLink: response.data.data.link });
+//     } else {
+//       res.status(500).json({ message: 'Payment initiation failed', error: response.data });
+//     }
+//   } catch (error) {
+//     res.status(500).json({ message: 'Error during payment initiation' });
+//   }
+// };
+
+// exports.paymentCallback = async (req, res) => {
+//   try {
+//     const { tx_ref, transaction_id, pictureId } = req.query;
+//     const transactionVerification = await axios.get(`https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`, {
+//       headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
+//     });
+
+//     const { status } = transactionVerification.data.data;
+//     if (status === 'successful') {
+//       await Picture.findByIdAndUpdate(pictureId, { $inc: { viewCount: 1 } });
+//       return res.redirect('http://localhost:3000/view-success');
+//     } else {
+//       return res.redirect('http://localhost:3000/view-failed');
+//     }
+//   } catch (error) {
+//     res.status(500).json({ message: 'Error processing payment callback' });
+//   }
+// };
+
+// Paymentcontroller.js
+const Picture = require('../models/PictureModel');
+const Payment = require('../models/PaymentModel');
+const Flutterwave = require('flutterwave-node-v3');
+const axios = require('axios');
+
+// Initialize Flutterwave
+const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
+
+exports.initiateCardPayment = async (req, res) => {
   try {
-    const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
-    const response = await axios.post(
-      `${PAYPAL_BASE_URL}/v1/oauth2/token`,
-      "grant_type=client_credentials",
-      {
-        headers: {
-          Authorization: `Basic ${auth}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      }
-    );
-    return response.data.access_token;
-  } catch (error) {
-    console.error("Failed to retrieve PayPal access token:", error);
-    throw new Error("Unable to retrieve PayPal access token");
-  }
-}
+    const { amount, currency, email, phoneNumber, userId, pictureId } = req.body;
 
-// Controller to set payment by User1
-exports.setPaymentSettings = async (req, res) => {
-  const { userId, price, frequency } = req.body;
+    if (!amount || !currency || !phoneNumber || !userId || !pictureId) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
 
-  try {
-    const paymentSettings = new PaymentSettings({ userId, price, frequency });
-    await paymentSettings.save();
-    res.status(201).json({ success: true, paymentSettings });
-  } catch (error) {
-    res.status(500).json({ success: false, message: "Error setting payment details" });
-  }
-};
+    const tx_ref = 'CARDPAY-' + Date.now();
 
-// Controller to initiate payment by User2
-exports.createPayment = async (req, res) => {
-  const { payeeId, payerId } = req.body;
-  const paymentSettings = await PaymentSettings.findOne({ userId: payeeId });
-
-  if (!paymentSettings) return res.status(404).json({ message: "Payment settings not found" });
-
-  try {
-    const accessToken = await getPayPalAccessToken();
-    const orderResponse = await axios.post(
-      `${PAYPAL_BASE_URL}/v2/checkout/orders`,
-      {
-        intent: "CAPTURE",
-        purchase_units: [{ amount: { currency_code: "USD", value: paymentSettings.price } }],
-      },
-      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
-    );
-
-    const { id: orderId } = orderResponse.data;
-    const transaction = new Transaction({
-      payerId,
-      payeeId,
-      price: paymentSettings.price,
-      status: "Pending",
+    // Step 1: Save the pending payment in the database
+    const payment = new Payment({
+      tx_ref,
+      amount,
+      currency,
+      email,
+      phoneNumber,
+      userId,
+      pictureId,
+      status: 'pending'
     });
-    await transaction.save();
+    await payment.save();
 
-    res.status(200).json({ success: true, orderId, transactionId: transaction._id });
+    // Step 2: Initiate the payment with Flutterwave
+    const paymentPayload = {
+      tx_ref,
+      amount,
+      currency,
+      redirect_url: 'http://localhost:5000/api/payment/callback',
+      customer: {
+        email: email || 'no-email@example.com',
+        phonenumber: phoneNumber,
+      },
+      payment_options: 'card',
+      customizations: {
+        title: 'Card Payment',
+        description: 'Pay with your bank card',
+      },
+    };
+
+    const response = await axios.post('https://api.flutterwave.com/v3/payments', paymentPayload, {
+      headers: {
+        Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.data && response.data.data && response.data.data.link) {
+      res.status(200).json({ paymentLink: response.data.data.link });
+    } else {
+      res.status(500).json({ message: 'Payment initiation failed', error: response.data });
+    }
   } catch (error) {
-    console.error("Error creating payment order:", error);  // Log full error
-    res.status(500).json({ success: false, message: "Error initiating payment" });
+    res.status(500).json({ message: 'Error during payment initiation' });
   }
 };
 
-
-// Controller to capture payment by User2
-exports.capturePayment = async (req, res) => {
-  const { orderId, transactionId } = req.body;
-
+exports.paymentCallback = async (req, res) => {
   try {
-    const accessToken = await getPayPalAccessToken();
+    const { tx_ref, transaction_id } = req.query;
 
-    // Capture the payment
-    await axios.post(
-      `${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}/capture`,
-      {},
-      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
-    );
+    const transactionVerification = await axios.get(`https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`, {
+      headers: {
+        Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`
+      }
+    });
 
-    // Update transaction status to 'Completed'
-    await Transaction.findByIdAndUpdate(transactionId, { status: "Completed" });
-    res.status(200).json({ success: true, message: "Payment captured successfully" });
+    const { status, customer, amount, currency } = transactionVerification.data.data;
+
+    if (status === 'successful') {
+      // Find and update the payment status to 'successful'
+      const payment = await Payment.findOneAndUpdate(
+        { tx_ref },
+        { status: 'successful' },
+        { new: true }
+      );
+
+      if (payment) {
+        // Add user to the list of paid users for the picture
+        await Picture.findByIdAndUpdate(payment.pictureId, {
+          $addToSet: { paidUsers: payment.userId }
+        });
+      }
+
+      return res.redirect('http://localhost:3000/list');
+    } else {
+      // Update the payment record as failed
+      await Payment.findOneAndUpdate({ tx_ref }, { status: 'failed' });
+      return res.redirect('http://localhost:3000/failed');
+    }
   } catch (error) {
-    res.status(500).json({ success: false, message: "Error capturing payment" });
+    console.error('Error processing payment callback:', error);
+    res.status(500).json({ message: 'Error processing payment callback' });
   }
 };

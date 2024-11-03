@@ -4,7 +4,8 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 const connectDB = require('./config/database');
-const paymentRoutes = require('./routes/paymentRoutes');
+const paymentRoutes = require('./routes/PaymentRoutes');
+const pictureRoutes = require('./routes/PictureRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -13,7 +14,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-app.use('/api/payments', paymentRoutes);
+app.use('/api/payment', paymentRoutes);
+app.use('/api/picture', pictureRoutes);
 
 const server = http.createServer(app);
 const io = socketIo(server);

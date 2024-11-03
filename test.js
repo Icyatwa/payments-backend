@@ -1,112 +1,190 @@
-// .env
-ADMIN_EMAIL=olympusexperts@gmail.com
-ADMIN_PASSWORD=mountolympusABBA@@
-JWT_SECRET=kkkkddddcccc
-
-// models/userModel.js
+// models/PictureModel.js
 const mongoose = require('mongoose');
 
-const userSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-  },
-  password: {
-    type: String,
-    required: true,
-  },
-});
+const pictureSchema = new mongoose.Schema({
+  url: { type: String, required: true },
+  price: { type: Number, required: true },
+  ownerId: { type: String, required: true }, // ID of the picture owner
+  viewCount: { type: Number, default: 0 }, // Count of views paid for
+  createdAt: { type: Date, default: Date.now },
+}, { timestamps: true });
 
-const User = mongoose.model('User', userSchema);
-module.exports = User;
+module.exports = mongoose.model('Picture', pictureSchema);
 
 
-// controllers/authController.js
-const User = require('../models/userModel');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+// controllers/PictureController.js
+const Picture = require('../models/ImageModel');
+const Payment = require('../models/PaymentModel');
+const Flutterwave = require('flutterwave-node-v3');
+const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
 
-// SECRET PASSWORD AND EMAIL (Stored in environment variables)
-const { ADMIN_EMAIL, ADMIN_PASSWORD, JWT_SECRET } = process.env;
-
-// Login handler
-exports.login = async (req, res) => {
-  const { email, password } = req.body;
-
-  // Check if the email matches the allowed one
-  if (email !== ADMIN_EMAIL) {
-    return res.status(403).json({ message: "Access Denied" });
-  }
-
+exports.uploadPicture = async (req, res) => {
   try {
-    // Check if user exists
-    const user = await User.findOne({ email });
+    const { url, price, ownerId } = req.body;
+
+    if (!url || !price || !ownerId) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const picture = new Picture({ url, price, ownerId });
+    await picture.save();
+
+    res.status(201).json({ message: 'Picture uploaded successfully', picture });
+  } catch (error) {
+    res.status(500).json({ message: 'Error uploading picture' });
+  }
+};
+
+exports.viewPicture = async (req, res) => {
+  try {
+    const { pictureId, userId } = req.body;
+    const picture = await Picture.findById(pictureId);
+
+    if (!picture) {
+      return res.status(404).json({ message: 'Picture not found' });
+    }
+
+    const tx_ref = `VIEW-${pictureId}-${Date.now()}`;
+    const paymentPayload = {
+      tx_ref,
+      amount: picture.price,
+      currency: 'USD',
+      redirect_url: `http://localhost:5000/api/payment/callback?pictureId=${pictureId}&userId=${userId}`,
+      customer: { email: 'no-email@example.com', phonenumber: '1234567890' },
+      customizations: { title: 'Picture Access', description: `Pay to view picture` },
+    };
+
+    const response = await flw.Payment.initialize(paymentPayload);
+    res.status(200).json({ paymentLink: response.data.link });
+  } catch (error) {
+    res.status(500).json({ message: 'Error initializing picture view payment' });
+  }
+};
+
+exports.getEarnings = async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+    const earnings = await Payment.find({ ownerId, status: 'successful' });
+    const totalEarnings = earnings.reduce((acc, payment) => acc + payment.amount, 0);
     
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Verify the password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    // Generate JWT token
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '1h' });
-
-    res.json({
-      message: 'Login successful',
-      token,
-    });
+    res.status(200).json({ totalEarnings });
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Error fetching earnings' });
   }
 };
 
-// Initialize the admin user if it doesn't exist
-exports.initAdmin = async (req, res) => {
-  try {
-    const user = await User.findOne({ email: ADMIN_EMAIL });
-
-    if (!user) {
-      // Hash the default password
-      const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 10);
-
-      // Create the admin user
-      const newUser = new User({
-        email: ADMIN_EMAIL,
-        password: hashedPassword,
-      });
-
-      await newUser.save();
-      console.log('Admin user created successfully.');
-    }
-  } catch (error) {
-    console.error('Error creating admin user', error);
-  }
-};
-
-// routes/authRoutes.js
+// routes/PictureRoutes.js
 const express = require('express');
-const authController = require('../controllers/authController');
-
 const router = express.Router();
+const pictureController = require('../controllers/ImageController');
 
-// Route for login
-router.post('/login', authController.login);
+router.post('/upload', pictureController.uploadPicture);
+router.post('/view', pictureController.viewPicture);
+router.get('/earnings/:ownerId', pictureController.getEarnings);
 
-// Initialize admin user (Run only once during setup)
-router.get('/init-admin', authController.initAdmin);
+module.exports = router;
+
+// PaymentModel.js
+const mongoose = require('mongoose');
+
+const paymentSchema = new mongoose.Schema({
+  tx_ref: { type: String, required: true, unique: true },
+  amount: { type: Number, required: true },
+  currency: { type: String, required: true },
+  status: { type: String, enum: ['pending', 'successful', 'failed'], default: 'pending' },
+  email: { type: String, required: false },
+  phoneNumber: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+}, { timestamps: true });
+
+module.exports = mongoose.model('Payment', paymentSchema);
+
+// Paymentcontroller.js
+const Flutterwave = require('flutterwave-node-v3');
+const axios = require('axios');
+
+// Initialize Flutterwave
+const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
+
+exports.initiateCardPayment = async (req, res) => {
+  try {
+    const { amount, currency, email, phoneNumber } = req.body;
+
+    if (!amount || !currency || !phoneNumber) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const tx_ref = 'CARDPAY-' + Date.now();
+    const paymentPayload = {
+      tx_ref: tx_ref,
+      amount: amount,
+      currency: currency,
+      redirect_url: 'http://localhost:5000/api/payment/callback',
+      customer: {
+        email: email || 'no-email@example.com',
+        phonenumber: phoneNumber,
+      },
+      payment_options: 'card',
+      customizations: {
+        title: 'Card Payment',
+        description: 'Pay with your bank card',
+      },
+    };
+
+    const response = await axios.post('https://api.flutterwave.com/v3/payments', paymentPayload, {
+      headers: {
+        Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.data && response.data.data && response.data.data.link) {
+      res.status(200).json({ paymentLink: response.data.data.link });
+    } else {
+      res.status(500).json({ message: 'Payment initiation failed', error: response.data });
+    }
+  } catch (error) {
+    res.status(500).json({ message: 'Error during payment initiation' });
+  }
+};
+
+exports.paymentCallback = async (req, res) => {
+  try {
+    const { tx_ref, transaction_id, pictureId } = req.query;
+    const transactionVerification = await axios.get(`https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`, {
+      headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
+    });
+
+    const { status } = transactionVerification.data.data;
+    if (status === 'successful') {
+      await Picture.findByIdAndUpdate(pictureId, { $inc: { viewCount: 1 } });
+      return res.redirect('http://localhost:3000/view-success');
+    } else {
+      return res.redirect('http://localhost:3000/view-failed');
+    }
+  } catch (error) {
+    res.status(500).json({ message: 'Error processing payment callback' });
+  }
+};
+
+// PaymentRoutes.js
+const express = require('express');
+const router = express.Router();
+const paymentController = require('../controllers/PaymentController');
+
+router.post('/initiate-card-payment', paymentController.initiateCardPayment);
+router.get('/callback', paymentController.paymentCallback);
 
 module.exports = router;
 
 // server.js
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
+const socketIo = require('socket.io');
 const connectDB = require('./config/database');
-const authRoutes = require('./routes/authRoutes');
+const paymentRoutes = require('./routes/PaymentRoutes');
+const imageRoutes = require('./routes/ImageRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -115,8 +193,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-app.use('/api/auth', authRoutes);
+app.use('/api/payment', paymentRoutes);
+app.use('/api/image', imageRoutes);
 
+const server = http.createServer(app);
+const io = socketIo(server);
+
+module.exports.io = io;
 connectDB()
   .then(() => {
     server.listen(PORT, () => {
@@ -127,188 +210,58 @@ connectDB()
     console.log(error);
   });
 
-// LoginPage.js
+// components/PhotoUploadForm.js
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import './auth.css'
+import { useClerk } from '@clerk/clerk-react';
 
-const LoginPage = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const navigate = useNavigate();
+const PhotoUploadForm = () => {
+  const { user } = useClerk();
+  const userId = user?.id;
+  const [url, setUrl] = useState('');
+  const [price, setPrice] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/login', {
-        email,
-        password,
-      });
-
-      // Save the token in localStorage
-      localStorage.setItem('token', response.data.token);
-
-      // Redirect to homepage
-      navigate('/');
-    } catch (err) {
-      setError('Invalid email or password');
+      await axios.post('http://localhost:5000/api/image/upload', { url, price, ownerId: userId });
+      alert('Picture uploaded successfully!');
+    } catch (error) {
+      console.error('Error uploading picture:', error);
     }
   };
 
   return (
-    <div className='login-container'>
-      <h1>Login</h1>
-      <form onSubmit={handleSubmit}>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-          required
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
-          required
-        />
-        <button type="submit">Login</button>
-      </form>
-      {error && <p>{error}</p>}
-    </div>
+    <form onSubmit={handleSubmit}>
+      <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Picture URL" required />
+      <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price" required />
+      <button type="submit">Upload Picture</button>
+    </form>
   );
 };
 
-export default LoginPage;
+export default PhotoUploadForm;
 
-// RequireAuth.js
-import React, { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-
-// Higher-Order Component to protect routes
-const RequireAuth = ({ children }) => {
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      navigate('/login');  // Redirect to login if no token is found
-    }
-  }, [navigate]);
-
-  return children;  // Render the protected components if authenticated
-};
-
-export default RequireAuth;
-
-// header.js
-import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import './styles/header.css';
-import Logo from "./logo";
-import menuIcon from '../assets/img/menu.png';
-import closeIcon from '../assets/img/close.png';
-
-function Header() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    // Check if the token exists in localStorage
-    const token = localStorage.getItem('token');
-    if (token) {
-      setIsLoggedIn(true);
-    } else {
-      setIsLoggedIn(false);
-    }
-  }, []);
-
-  const handleLogout = () => {
-    // Clear token and redirect to login
-    localStorage.removeItem('token');
-    setIsLoggedIn(false);
-    navigate('/login');
-  };
-
-  const toggleMenu = () => {
-    setIsOpen(!isOpen);
-  };
-
-  return (
-    <div className='dash-header-ctn'>
-      <header>
-        <nav>
-          <div className="container">
-            <div className={`nav-links ${isOpen ? 'open' : ''}`}>
-              <Link to='/edit' onClick={toggleMenu}>Edit Ads</Link>
-            </div>
-            <div className="logo">
-              <Logo />
-            </div>
-            <div className="user">
-              {isLoggedIn ? (
-                <button onClick={handleLogout}>Logout</button>
-              ) : (
-                <Link to="/login" onClick={toggleMenu}>Login</Link>
-              )}
-            </div>
-            <button className="menu-toggle" onClick={toggleMenu}>
-              <img src={isOpen ? closeIcon : menuIcon} alt="Menu Toggle" />
-            </button>
-          </div>
-        </nav>
-      </header>
-    </div>
-  );
-}
-
-export default Header;
-
-// index.js
-import './index.css';
+// components/PictureView.js
 import React from 'react';
-import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import LoginPage from './pages/auth/LoginPage';
-import Homepage from './pages/Homepage';
-import Header from './pages/header';
-import RequireAuth from './pages/auth/RequireAuth'; // The HOC for authentication
+import axios from 'axios';
 
-// Protect all routes except login
-const ProtectedRoute = ({ children }) => {
+const PictureView = ({ pictureId }) => {
+  const handleView = async () => {
+    try {
+      const response = await axios.post('http://localhost:5000/api/image/view', { pictureId });
+      window.location.href = response.data.paymentLink;
+    } catch (error) {
+      console.error('Error initializing view payment:', error);
+    }
+  };
+
   return (
-    <RequireAuth>
-      {children}
-    </RequireAuth>
+    <button onClick={handleView}>Pay to View Picture</button>
   );
 };
 
-const App = () => (
-  <BrowserRouter>
-    <Header /> {/* Header at the top level */}
-    <Routes>
-      <Route path="/login" element={<LoginPage />} /> {/* The only public page */}
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <Homepage />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
-  </BrowserRouter>
-);
+export default PictureView;
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
-
-POST http://localhost:5000/api/auth/login 404 (Not Found)
+ViewPhoto.js:11 Error initializing view payment: AxiosError {message: 'Request failed with status code 404', name: 'AxiosError', code: 'ERR_BAD_REQUEST', config: {…}, request: XMLHttpRequest, …}
+fix it
