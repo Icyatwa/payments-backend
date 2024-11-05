@@ -1,16 +1,4 @@
-// // models/PictureModel.js
-// const mongoose = require('mongoose');
-
-// const pictureSchema = new mongoose.Schema({
-//   url: { type: String, required: true },
-//   price: { type: Number, required: true },
-//   ownerId: { type: String, required: true }, // ID of the picture owner
-//   viewCount: { type: Number, default: 0 },
-// }, { timestamps: true });
-
-// module.exports = mongoose.model('Picture', pictureSchema);
-
-// models/PictureModel.js
+// PictureModel.js
 const mongoose = require('mongoose');
 
 const pictureSchema = new mongoose.Schema({
