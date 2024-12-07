@@ -63,7 +63,7 @@ exports.initiateCardPayment = async (req, res) => {
     res.status(500).json({ message: 'Error during payment initiation' });
   }
 };
-
+ 
 exports.paymentCallback = async (req, res) => {
   try {
     const { tx_ref, transaction_id } = req.query;

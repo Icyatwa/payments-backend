@@ -6,7 +6,7 @@ const paymentSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: { type: String, required: true },
   status: { type: String, enum: ['pending', 'successful', 'failed'], default: 'pending' },
-  email: { type: String, required: false },
+  email: { type: String, required: false }, 
   phoneNumber: { type: String, required: true },
   userId: { type: String, required: true }, // ID of the user who paid
   pictureId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Picture' },

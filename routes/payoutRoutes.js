@@ -7,4 +7,4 @@ const { initiatePayoutTransfer, payoutCallback } = require('../controllers/Payou
 router.post('/', initiatePayoutTransfer);
 router.get('/callback', payoutCallback);
 
-module.exports = router;
+module.exports = router; 

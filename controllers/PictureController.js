@@ -30,7 +30,7 @@ exports.getAllPictures = async (req, res) => {
 };
 
 exports.getEarnings = async (req, res) => {
-  try {
+  try { 
     const { creatorId } = req.params;
 
     // Get all pictures owned by the creator
