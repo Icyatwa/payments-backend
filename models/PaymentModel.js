@@ -9,7 +9,8 @@ const paymentSchema = new mongoose.Schema({
   email: { type: String, required: false },
   phoneNumber: { type: String, required: true },
   userId: { type: String, required: true }, // ID of the user who paid
-  pictureId: { type: String, required: true }, // ID of the picture being paid for
+  pictureId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Picture' },
+  withdrawalStatus: { type: String, enum: ['pending', 'completed', 'none'], default: 'none' }, // Track withdrawals
 }, { timestamps: true });
 
 module.exports = mongoose.model('Payment', paymentSchema);
